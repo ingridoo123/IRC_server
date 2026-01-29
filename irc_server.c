@@ -81,12 +81,15 @@ int main() {
         return 1;
     }
     
-    printf("╔════════════════════════════════════════════════════════╗\n");
-    printf("║         SERWER IRC - PROJEKT SIECI KOMPUTEROWE        ║\n");
+        printf("╔════════════════════════════════════════════════════════╗\n");
+    printf("║         SERWER IRC       ║\n");
     printf("╚════════════════════════════════════════════════════════╝\n");
     printf("[*] Serwer nasluchuje na porcie %d\n", PORT);
     printf("[*] Oczekiwanie na polaczenia...\n\n");
+
     
+    (void)create_channel("#general");
+
     while(1) {
         addr_len = sizeof(client_addr);
         client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
