@@ -36,6 +36,7 @@ Channel* channels[MAX_CHANNELS];
 int channel_count = 0;
 pthread_mutex_t channels_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Deklaracje funkcji
 void* handle_client(void* arg);
 void process_command(User* user, char* command);
 void send_to_client(int socket_fd, const char* message);
@@ -46,7 +47,6 @@ Channel* create_channel(const char* name);
 void add_user_to_channel(Channel* channel, User* user);
 void remove_user_from_channel(Channel* channel, User* user);
 void remove_client(User* user);
-void trim_newline(char* str);
 void send_help(int socket_fd);
 
 int main() {
@@ -82,7 +82,7 @@ int main() {
     }
     
     printf("╔════════════════════════════════════════════════════════╗\n");
-    printf("║         SERWER IRC        ║\n");
+    printf("║          SERWER IRC         ║\n");
     printf("╚════════════════════════════════════════════════════════╝\n");
     printf("[*] Serwer nasluchuje na porcie %d\n", PORT);
     printf("[*] Oczekiwanie na polaczenia...\n\n");
@@ -116,7 +116,7 @@ int main() {
         pthread_mutex_unlock(&clients_mutex);
         
         send_to_client(client_fd, "╔════════════════════════════════════════════════════════╗\n");
-        send_to_client(client_fd, "║          Witaj na serwerze IRC!                       ║\n");
+        send_to_client(client_fd, "║           Witaj na serwerze IRC!                        ║\n");
         send_to_client(client_fd, "╚════════════════════════════════════════════════════════╝\n");
         send_to_client(client_fd, "Wpisz: HELP aby zobaczyc dostepne komendy\n");
         send_to_client(client_fd, "Zacznij od: NICK <twoj_pseudonim>\n\n");
@@ -135,16 +135,32 @@ int main() {
     return 0;
 }
 
+// --- FUNKCJA Z BUFOROWANIEM ---
 void* handle_client(void* arg) {
     User* user = (User*)arg;
     char buffer[BUFFER_SIZE];
+    int current_pos = 0;
     ssize_t bytes_read;
     
     printf("[Watek %lu] Obsluga klienta fd=%d\n", pthread_self(), user->socket_fd);
     
+   
+    memset(buffer, 0, BUFFER_SIZE);
+
     while(1) {
-        memset(buffer, 0, BUFFER_SIZE);
-        bytes_read = read(user->socket_fd, buffer, BUFFER_SIZE - 1);
+        //miejsce w buforze
+        int space_left = BUFFER_SIZE - current_pos - 1;
+        
+        // Zabezpieczenie przed przepelnieniem bufora
+        if (space_left <= 0) {
+            printf("[!] Przepelnienie bufora dla fd=%d. Resetowanie.\n", user->socket_fd);
+            current_pos = 0;
+            space_left = BUFFER_SIZE - 1;
+            memset(buffer, 0, BUFFER_SIZE);
+        }
+
+        // Czytamy dane i dopisujemy je na koniec tego, co juz mamy
+        bytes_read = read(user->socket_fd, buffer + current_pos, space_left);
         
         if (bytes_read <= 0) {
             printf("[-] Klient %s (fd=%d) rozlaczony\n", 
@@ -153,13 +169,44 @@ void* handle_client(void* arg) {
             break;
         }
         
-        trim_newline(buffer);
+        current_pos += bytes_read;
+        buffer[current_pos] = '\0';
         
-        if (strlen(buffer) > 0) {
-            printf("[%s] Komenda: %s\n", 
+        // Przetwarzanie pelnych linii
+        char *newline_ptr;
+        while ((newline_ptr = strchr(buffer, '\n')) != NULL) {
+            
+            int command_len = newline_ptr - buffer;
+            
+            // Obsluga znakow konca linii CRLF (\r\n) lub LF (\n)
+            if (command_len > 0 && buffer[command_len - 1] == '\r') {
+                buffer[command_len - 1] = '\0'; // Ucinamy \r
+            } else {
+                buffer[command_len] = '\0'; // Ucinamy \n
+            }
+            
+            // Jesli linia nie jest pusta, przetwarzamy komende
+            if (strlen(buffer) > 0) {
+                 printf("[%s] Komenda: %s\n", 
                    user->nickname[0] ? user->nickname : "ANONYMOUS", 
                    buffer);
-            process_command(user, buffer);
+                process_command(user, buffer);
+            }
+            
+            // Przesuwanie pozostalych danych na poczatek bufora (memmove)
+            // Dane po znaku nowej linii
+            int remaining_data_len = current_pos - (newline_ptr - buffer) - 1;
+            
+            if (remaining_data_len > 0) {
+                memmove(buffer, newline_ptr + 1, remaining_data_len);
+                current_pos = remaining_data_len;
+            } else {
+                
+                current_pos = 0;
+            }
+            
+            // Wyczyszczenie reszty bufora dla bezpieczenstwa
+            memset(buffer + current_pos, 0, BUFFER_SIZE - current_pos);
         }
     }
     
@@ -168,6 +215,7 @@ void* handle_client(void* arg) {
     free(user);
     pthread_exit(NULL);
 }
+// -------------------------------------------
 
 void process_command(User* user, char* command) {
     char cmd[BUFFER_SIZE];
@@ -178,6 +226,7 @@ void process_command(User* user, char* command) {
     memset(arg1, 0, BUFFER_SIZE);
     memset(arg2, 0, BUFFER_SIZE);
     
+    // sscanf automatycznie ignoruje biale znaki na poczatku
     sscanf(command, "%s %s %[^\n]", cmd, arg1, arg2);
     
     for(int i = 0; cmd[i]; i++) {
@@ -406,32 +455,32 @@ void process_command(User* user, char* command) {
 void send_help(int socket_fd) {
     send_to_client(socket_fd, "\n");
     send_to_client(socket_fd, "╔════════════════════════════════════════════════════════════════╗\n");
-    send_to_client(socket_fd, "║                    DOSTEPNE KOMENDY IRC                       ║\n");
+    send_to_client(socket_fd, "║                     DOSTEPNE KOMENDY IRC                       ║\n");
     send_to_client(socket_fd, "╚════════════════════════════════════════════════════════════════╝\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  NICK <pseudonim>          - Ustaw swoj pseudonim\n");
+    send_to_client(socket_fd, "  NICK <pseudonim>            - Ustaw swoj pseudonim\n");
     send_to_client(socket_fd, "                              Przyklad: NICK JanKowalski\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  JOIN <#kanal>             - Dolacz do kanalu (lub stworz nowy)\n");
+    send_to_client(socket_fd, "  JOIN <#kanal>               - Dolacz do kanalu (lub stworz nowy)\n");
     send_to_client(socket_fd, "                              Przyklad: JOIN #general\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  LEAVE <#kanal>            - Opusc kanal\n");
+    send_to_client(socket_fd, "  LEAVE <#kanal>              - Opusc kanal\n");
     send_to_client(socket_fd, "                              Przyklad: LEAVE #general\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  MSG <#kanal> <wiadomosc>  - Wyslij wiadomosc na kanal\n");
+    send_to_client(socket_fd, "  MSG <#kanal> <wiadomosc>    - Wyslij wiadomosc na kanal\n");
     send_to_client(socket_fd, "                              Przyklad: MSG #general Witam!\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  PRIVMSG <nick> <tekst>    - Wyslij prywatna wiadomosc\n");
+    send_to_client(socket_fd, "  PRIVMSG <nick> <tekst>      - Wyslij prywatna wiadomosc\n");
     send_to_client(socket_fd, "                              Przyklad: PRIVMSG Anna Czesc!\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  LIST                      - Wyswietl liste kanalow\n");
+    send_to_client(socket_fd, "  LIST                        - Wyswietl liste kanalow\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  USERS <#kanal>            - Wyswietl uzytkownikow na kanale\n");
+    send_to_client(socket_fd, "  USERS <#kanal>              - Wyswietl uzytkownikow na kanale\n");
     send_to_client(socket_fd, "                              Przyklad: USERS #general\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  HELP                      - Wyswietl ta pomoc\n");
+    send_to_client(socket_fd, "  HELP                        - Wyswietl ta pomoc\n");
     send_to_client(socket_fd, "\n");
-    send_to_client(socket_fd, "  QUIT                      - Rozlacz sie z serwerem\n");
+    send_to_client(socket_fd, "  QUIT                        - Rozlacz sie z serwerem\n");
     send_to_client(socket_fd, "\n");
     send_to_client(socket_fd, "╚════════════════════════════════════════════════════════════════╝\n");
     send_to_client(socket_fd, "\n");
@@ -525,12 +574,4 @@ void remove_client(User* user) {
         }
     }
     pthread_mutex_unlock(&clients_mutex);
-}
-
-void trim_newline(char* str) {
-    int len = strlen(str);
-    while (len > 0 && (str[len-1] == '\n' || str[len-1] == '\r')) {
-        str[len-1] = '\0';
-        len--;
-    }
 }
