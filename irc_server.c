@@ -215,7 +215,6 @@ void* handle_client(void* arg) {
     free(user);
     pthread_exit(NULL);
 }
-// -------------------------------------------
 
 void process_command(User* user, char* command) {
     char cmd[BUFFER_SIZE];
@@ -251,12 +250,15 @@ void process_command(User* user, char* command) {
             return;
         }
         
-        strcpy(user->nickname, arg1);
+        // Zabezpiecz kopiowanie nicku
+        strncpy(user->nickname, arg1, MAX_NICKNAME - 1);
+        user->nickname[MAX_NICKNAME - 1] = '\0';
+
         user->authenticated = 1;
         pthread_mutex_unlock(&clients_mutex);
         
         char response[BUFFER_SIZE];
-        snprintf(response, BUFFER_SIZE, "OK NICK %s\n", user->nickname);
+        snprintf(response, BUFFER_SIZE, "OK NICK %.*s\n", MAX_NICKNAME, user->nickname);
         send_to_client(user->socket_fd, response);
         
         printf("[*] Uzytkownik ustawil nick: %s\n", user->nickname);
@@ -284,10 +286,10 @@ void process_command(User* user, char* command) {
         pthread_mutex_unlock(&channels_mutex);
         
         char response[BUFFER_SIZE];
-        snprintf(response, BUFFER_SIZE, "OK JOIN %s\n", arg1);
+        snprintf(response, BUFFER_SIZE, "OK JOIN %.*s\n", MAX_CHANNEL_NAME, arg1);
         send_to_client(user->socket_fd, response);
         
-        snprintf(response, BUFFER_SIZE, "USERJOINED %s %s\n", arg1, user->nickname);
+        snprintf(response, BUFFER_SIZE, "USERJOINED %.*s %s\n", MAX_CHANNEL_NAME, arg1, user->nickname);
         broadcast_to_channel(channel, response, user);
         
         printf("[*] %s dolaczyl do %s\n", user->nickname, arg1);
@@ -310,10 +312,10 @@ void process_command(User* user, char* command) {
             remove_user_from_channel(channel, user);
             
             char response[BUFFER_SIZE];
-            snprintf(response, BUFFER_SIZE, "OK LEAVE %s\n", arg1);
+            snprintf(response, BUFFER_SIZE, "OK LEAVE %.*s\n", MAX_CHANNEL_NAME, arg1);
             send_to_client(user->socket_fd, response);
             
-            snprintf(response, BUFFER_SIZE, "USERLEFT %s %s\n", arg1, user->nickname);
+            snprintf(response, BUFFER_SIZE, "USERLEFT %.*s %s\n", MAX_CHANNEL_NAME, arg1, user->nickname);
             broadcast_to_channel(channel, response, NULL);
             
             printf("[*] %s opuscil %s\n", user->nickname, arg1);
@@ -322,44 +324,48 @@ void process_command(User* user, char* command) {
     }
     
     else if (strcmp(cmd, "MSG") == 0) {
-    if (!user->authenticated) {
-        send_to_client(user->socket_fd, "ERROR Najpierw uzyj: NICK <pseudonim>\n");
-        return;
-    }
-    
-    if (strlen(arg1) == 0 || strlen(arg2) == 0) {
-        send_to_client(user->socket_fd, "ERROR Uzycie: MSG <#kanal> <wiadomosc>\n");
-        return;
-    }
-    
-    pthread_mutex_lock(&channels_mutex);
-    Channel* channel = find_channel_by_name(arg1);
-    if (channel != NULL) {
-        int is_member = 0;
-        for (int i = 0; i < channel->member_count; i++) {
-            if (channel->members[i] == user) {
-                is_member = 1;
-                break;
-            }
-        }
-        
-        if (!is_member) {
-            pthread_mutex_unlock(&channels_mutex);
-            send_to_client(user->socket_fd, "ERROR Nie jestes na tym kanale! Uzyj: JOIN ");
-            send_to_client(user->socket_fd, arg1);
-            send_to_client(user->socket_fd, "\n");
+        if (!user->authenticated) {
+            send_to_client(user->socket_fd, "ERROR Najpierw uzyj: NICK <pseudonim>\n");
             return;
         }
         
-        char message[BUFFER_SIZE];
-        snprintf(message, BUFFER_SIZE, "MESSAGE %s %s %s\n", arg1, user->nickname, arg2);
-        broadcast_to_channel(channel, message, user);
+        if (strlen(arg1) == 0 || strlen(arg2) == 0) {
+            send_to_client(user->socket_fd, "ERROR Uzycie: MSG <#kanal> <wiadomosc>\n");
+            return;
+        }
         
-        printf("[MSG %s] %s: %s\n", arg1, user->nickname, arg2);
-    } else {
-        send_to_client(user->socket_fd, "ERROR Kanal nie istnieje\n");
-    }
-    pthread_mutex_unlock(&channels_mutex);
+        pthread_mutex_lock(&channels_mutex);
+        Channel* channel = find_channel_by_name(arg1);
+        if (channel != NULL) {
+            int is_member = 0;
+            for (int i = 0; i < channel->member_count; i++) {
+                if (channel->members[i] == user) {
+                    is_member = 1;
+                    break;
+                }
+            }
+            
+            if (!is_member) {
+                pthread_mutex_unlock(&channels_mutex);
+                send_to_client(user->socket_fd, "ERROR Nie jestes na tym kanale! Uzyj: JOIN ");
+                send_to_client(user->socket_fd, arg1);
+                send_to_client(user->socket_fd, "\n");
+                return;
+            }
+            
+            char message[BUFFER_SIZE];
+            snprintf(message, BUFFER_SIZE, "MESSAGE %.*s %s %.*s\n", 
+                     MAX_CHANNEL_NAME, arg1, 
+                     user->nickname, 
+                     MAX_MESSAGE, arg2);
+                     
+            broadcast_to_channel(channel, message, user);
+            
+            printf("[MSG %s] %s: %s\n", arg1, user->nickname, arg2);
+        } else {
+            send_to_client(user->socket_fd, "ERROR Kanal nie istnieje\n");
+        }
+        pthread_mutex_unlock(&channels_mutex);
    }
     
     else if (strcmp(cmd, "PRIVMSG") == 0) {
@@ -377,7 +383,10 @@ void process_command(User* user, char* command) {
         User* recipient = find_user_by_nickname(arg1);
         if (recipient != NULL) {
             char message[BUFFER_SIZE];
-            snprintf(message, BUFFER_SIZE, "PRIVMSG %s %s\n", user->nickname, arg2);
+            snprintf(message, BUFFER_SIZE, "PRIVMSG %s %.*s\n", 
+                     user->nickname, 
+                     MAX_MESSAGE, arg2);
+                     
             send_to_client(recipient->socket_fd, message);
             send_to_client(user->socket_fd, "OK PRIVMSG\n");
             
@@ -399,9 +408,12 @@ void process_command(User* user, char* command) {
         strcpy(response, "CHANNELLIST ");
         
         for (int i = 0; i < channel_count; i++) {
-            strcat(response, channels[i]->name);
-            if (i < channel_count - 1) {
-                strcat(response, ",");
+            // Sprawdzenie czy nie przepelnimy bufora przy dopisywaniu
+            if (strlen(response) + strlen(channels[i]->name) + 2 < BUFFER_SIZE) {
+                strcat(response, channels[i]->name);
+                if (i < channel_count - 1) {
+                    strcat(response, ",");
+                }
             }
         }
         strcat(response, "\n");
@@ -428,9 +440,12 @@ void process_command(User* user, char* command) {
             strcpy(response, "USERLIST ");
             
             for (int i = 0; i < channel->member_count; i++) {
-                strcat(response, channel->members[i]->nickname);
-                if (i < channel->member_count - 1) {
-                    strcat(response, ",");
+                // Sprawdzenie przepelnienia
+                if (strlen(response) + strlen(channel->members[i]->nickname) + 2 < BUFFER_SIZE) {
+                    strcat(response, channel->members[i]->nickname);
+                    if (i < channel->member_count - 1) {
+                        strcat(response, ",");
+                    }
                 }
             }
             strcat(response, "\n");
